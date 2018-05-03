@@ -51,15 +51,15 @@ import_raw <- function(file_name, file_path = NULL, chan_nos = NULL, ...) {
                      continuous = TRUE)
   } else if (file_type == "vhdr") {
     # Takes the files from the header:
-    header <- load_vhdr(paste0(file_path, file_name))
-    data_file <- header$common_info$data_file
+    header_info <- load_vhdr(paste0(file_path, file_name))
+    data_file <- header_info$common_info$data_file
     data_ext <- tools::file_ext(data_file)
     # It only accepts .dat files (for now)
     if(data_ext == "dat"){
       vmrk_file <- header_info$common_info$vmrk_file
       srate  <- header_info$common_info$srate
       event_table <- load_vmrk(paste0(file_path, vmrk_file), srate)
-      data <- import_dat(paste0(file_path, dat_file), 
+      data <- import_dat(paste0(file_path, data_file), 
                         header_info$common_info$data_points,
                         header_info$chan_info, 
                         srate, 
@@ -356,9 +356,10 @@ import_dat <- function(file_name, data_points, chan_info,
   n_chan <- nrow(chan_info)
   dat_bin <- readBin(file_name, "double", data_points * n_chan, size = 4)
 
-  if(str_to_lower(str_sub(orientation,1,nchar("vector"))) == "vector"){
+  if(stringr::str_sub(orientation,1,nchar("vector")) %>% 
+      stringr::str_to_lower() == "vector"){
     sigs <- matrix(dat_bin, ncol = n_chan)  %>% 
-                as.tibble() 
+                tibble::as.tibble() 
   } else {
     stop("orientiation needs to be 'vectorized'")
   }
@@ -366,8 +367,8 @@ import_dat <- function(file_name, data_points, chan_info,
   colnames(sigs)  <- chan_info$labels
   n_chan <- nrow(chan_info)
   dat_bin <- readBin(file_name, "double", data_points * n_chan, size = 4)
-  timings <- tibble(sample = 1:dim(sigs)[[1]]) %>%
-              mutate(time = (sample - 1) / srate)
+  timings <- tibble::tibble(sample = 1:dim(sigs)[[1]]) %>%
+              dplyr::mutate(time = (sample - 1) / srate)
   data <- eeg_data(data = sigs, srate = srate,
                      chan_info = chan_info,
                      events = event_table, timings = timings,
@@ -388,12 +389,12 @@ import_dat <- function(file_name, data_points, chan_info,
 #' 
 load_vhdr <- function(file_name) {
 
-  content_vhdr <- read_file(file_name) %>% 
-            str_match_all(regex("\\[(.*?)\\]\n(.*?\n)(\n|\\Z)", 
+  content_vhdr <- readr::read_file(file_name) %>% 
+            stringr::str_match_all(stringr::regex("\\[(.*?)\\]\n(.*?\n)(\n|\\Z)", 
               dotall = TRUE, multiline=TRUE) ) %>% .[[1]]
 
   read_metadata <- function(tag) {
-   read_delim(content_vhdr[content_vhdr[,2] == tag,3],
+   readr::read_delim(content_vhdr[content_vhdr[,2] == tag,3],
                  delim = "=", comment = ";", col_names=c("type", "value"))
  }           
 
@@ -406,8 +407,8 @@ load_vhdr <- function(file_name) {
   
   
   common_info <- read_metadata("Common Infos") %>% 
-                 spread(type, value) %>% 
-                 transmute(data_points = as.numeric(DataPoints),
+                 tidyr::spread(type, value) %>% 
+                 dplyr::transmute(data_points = as.numeric(DataPoints),
                             seg_data_points = as.numeric(SegmentDataPoints),
                             orientation = DataOrientation,
                             domain = DataType,
@@ -415,13 +416,14 @@ load_vhdr <- function(file_name) {
                             data_file = DataFile,
                             vmrk_file = MarkerFile)
 
-  if(str_to_lower(str_sub(common_info$domain,1,nchar("time"))) != "time") {
+  if(stringr::str_sub(common_info$domain,1,nchar("time")) %>% 
+      stringr::str_to_lower() != "time") {
     stop("DataType needs to be 'time'")
   } else 
-  chan_info <- full_join(channel_info, coordinates, by = "type") %>% 
-                mutate(type = "EEG", sph.theta = NA, sph.phi = NA, 
+  chan_info <- dplyr::full_join(channel_info, coordinates, by = "type") %>% 
+                dplyr::mutate(type = "EEG", sph.theta = NA, sph.phi = NA, 
                         sph.radius = NA, urchan = NA,X=NA,Y=NA,Z=NA) %>%
-                select(labels, type, theta, radius, X, Y, Z, sph.theta,
+                dplyr::select(labels, type, theta, radius, X, Y, Z, sph.theta,
                  sph.phi, sph.radius, urchan, ref)
 
   out <- list()
@@ -449,34 +451,36 @@ load_vmrk <- function(file_name, srate) {
   # all channels)>, <Date (YYYYMMDDhhmmssuuuuuu)>
   # More information can be found in
   # http://pressrelease.brainproducts.com/markers/
-  markers_info_lines <- read_lines(file_name) %>% 
-                        str_detect("Mk[0-9]*?=") %>% which 
+  markers_info_lines <- readr::read_lines(file_name) %>% 
+                        stringr::str_detect("Mk[0-9]*?=") %>% which 
   start <- markers_info_lines %>% min - 1
   end <- markers_info_lines %>% max - start 
 
   col_names = c("Mk_number=Type","description","pos_dpoints", 
               "size_dp", "channel","date")
 
-  tibble_vmrk <- suppressWarnings(read_csv(file_name, col_names = col_names,
-                    col_types = cols(
-                                `Mk_number=Type` = col_character(),
-                                description = col_character(),
-                                pos_dpoints = col_integer(),
-                                size_dp = col_integer(),
-                                channel = col_integer(),
-                                date = col_double()
+  tibble_vmrk <- suppressWarnings(readr::read_csv(file_name, col_names = col_names,
+                    col_types = readr::cols(
+                                `Mk_number=Type` = readr::col_character(),
+                                description = readr::col_character(),
+                                pos_dpoints = readr::col_integer(),
+                                size_dp = readr::col_integer(),
+                                channel = readr::col_integer(),
+                                date = readr::col_double()
                                 ),
                     skip = start, n_max= end,
                     trim_ws = TRUE)) %>%
-                  separate(`Mk_number=Type`, c("mk","type"), sep ="=") %>%
-                  mutate(mk = as.numeric(str_remove(mk,"Mk")))
+                  tidyr::separate(`Mk_number=Type`, 
+                            c("mk","type"), sep ="=") %>%
+                  dplyr::mutate(mk = as.numeric(stringr::str_remove(mk,"Mk")))
 
   event_table <- tibble_vmrk %>% 
-                  transmute(event_type = str_replace(description,"s","") %>% 
+                  dplyr::transmute(event_type = 
+                        stringr::str_replace(description,"s","") %>% 
                                           as.integer, 
                           event_time = (pos_dpoints - 1 ) / srate,
                           event_onset = pos_dpoints - 1) %>% 
-                  filter(!is.na(event_type))
+                  dplyr::filter(!is.na(event_type))
            
   return(event_table)              
 }
