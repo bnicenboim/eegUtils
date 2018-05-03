@@ -81,12 +81,11 @@ import_raw <- function(file_name, file_path = NULL, chan_nos = NULL, ...) {
     data_file <- header_info$common_info$data_file
     data_ext <- tools::file_ext(data_file)
     # It only accepts .dat files (for now)
-    if(data_ext == "dat"){
+    if(data_ext == "dat" || data_ext == "eeg" ){
       vmrk_file <- header_info$common_info$vmrk_file
       srate  <- header_info$common_info$srate
       event_table <- load_vmrk(paste0(file_path, vmrk_file), srate)
       data <- import_dat(paste0(file_path, data_file), 
-                        header_info$common_info$data_points,
                         header_info$chan_info, 
                         srate, 
                         header_info$common_info$orientation, 
@@ -362,11 +361,9 @@ load_set <- function(file_name, df_out = FALSE) {
 
 #' Import binary .dat file
 #'
-#' Beta version of a function to import binary .dat files. Only intended for
-#' importing of vectorized files in time domain.
+#' Beta version of a function to import binary .dat files. 
 #'
 #' @param file_name Name of .dat file to be loaded.
-#' @param data_points Number of data points.
 #' @param srate Sampling rate.
 #' @param orientation Data orientation: VECTORIZED=ch1,pt1, ch1,pt2..., MULTIPLEXED=ch1,pt1, ch2,pt1.
 #' @param domain needs to be time domain.
@@ -376,23 +373,21 @@ load_set <- function(file_name, df_out = FALSE) {
 #' @export
 
 
-import_dat <- function(file_name, data_points, chan_info, 
+import_dat <- function(file_name, chan_info, 
                    srate, orientation = "vectorized", event_table = NULL) {
   
   n_chan <- nrow(chan_info)
-  dat_bin <- readBin(file_name, "double", data_points * n_chan, size = 4)
+  dat_bin <- readBin(file_name, "double", file.info(file_name)$size, size = 4)
 
-  if(stringr::str_sub(orientation,1,nchar("vector")) %>% 
-      stringr::str_to_lower() == "vector"){
-    sigs <- matrix(dat_bin, ncol = n_chan)  %>% 
+  vectorized = stringr::str_sub(orientation,1,nchar("vector")) %>% 
+      stringr::str_to_lower() == "vector"
+
+  sigs <- matrix(dat_bin, ncol = n_chan, byrow = !vectorized)  %>% 
                 tibble::as.tibble() 
-  } else {
-    stop("orientiation needs to be 'vectorized'")
-  }
+
 
   colnames(sigs)  <- chan_info$labels
-  n_chan <- nrow(chan_info)
-  dat_bin <- readBin(file_name, "double", data_points * n_chan, size = 4)
+  
   timings <- tibble::tibble(sample = 1:dim(sigs)[[1]]) %>%
               dplyr::mutate(time = (sample - 1) / srate)
   data <- eeg_data(data = sigs, srate = srate,
@@ -430,9 +425,10 @@ load_vhdr <- function(file_name) {
  }           
 
   out <- list()
-  binary_info <- read_metadata("Binary Infos")
+  binary_info <- read_metadata("Binary Infos") %>% 
+                 tidyr::spread(type, value)
   channel_info <- read_metadata("Channel Infos") %>% 
-              separate(value, c("labels","ref","res","unit"), sep=",")
+              separate(value, c("labels","ref","res","unit"), sep=",", fill="right")
   coordinates <- read_metadata("Coordinates") %>% 
                 separate(value, c("radius","theta","phi"), sep=",", fill="right")
   # this is ncase it can't find DataPoints and DataType in the header file
@@ -441,20 +437,21 @@ load_vhdr <- function(file_name) {
   common_info <- read_metadata("Common Infos") %>% 
                  tidyr::spread(type, value) %>%
                  readr::type_convert(col_types = readr::cols(
-                                            DataFile = col_character(),
-                                            DataFormat = col_character(),
-                                            DataOrientation = col_character(),
-                                            MarkerFile = col_character(),
-                                            NumberOfChannels = col_integer(),
-                                            SamplingInterval = col_double())) %>%
+                                            DataFile = readr::col_character(),
+                                            DataFormat = readr::col_character(),
+                                            DataOrientation = readr::col_character(),
+                                            MarkerFile = readr::col_character(),
+                                            NumberOfChannels = readr::col_integer(),
+                                            SamplingInterval = readr::col_double())) %>%
                  dplyr::transmute(data_points = DataPoints,
                             # seg_data_points = as.numeric(SegmentDataPoints),
                             orientation = DataOrientation,
                             domain = DataType,
                             srate =  1000000 / SamplingInterval,
                             data_file = DataFile,
-                            vmrk_file = MarkerFile)
-
+                            vmrk_file = MarkerFile) %>% 
+                dplyr::bind_cols(binary_info)
+                        
   if(stringr::str_sub(common_info$domain,1,nchar("time")) %>% 
       stringr::str_to_lower() != "time") {
     stop("DataType needs to be 'time'")
