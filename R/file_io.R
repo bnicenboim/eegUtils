@@ -14,7 +14,7 @@
 #' @importFrom tibble tibble as_tibble
 #' @export
 
-import_raw <- function(file_name, file_path = NULL, chan_nos = NULL) {
+import_raw <- function(file_name, file_path = NULL, chan_nos = NULL, ...) {
   file_type <- tools::file_ext(file_name)
 
   if (file_type == "bdf" | file_type == "edf") {
@@ -49,7 +49,29 @@ import_raw <- function(file_name, file_path = NULL, chan_nos = NULL) {
                      chan_info = data$chan_info[1:4],
                      events = event_table, timings = timings,
                      continuous = TRUE)
-    } else{
+  } else if (file_type == "vhdr") {
+    # Takes the files from the header:
+    header <- load_vhdr(paste0(file_path, file_name))
+    data_file <- header$common_info$data_file
+    data_ext <- tools::file_ext(data_file)
+    # It only accepts .dat files (for now)
+    if(data_ext == "dat"){
+      vmrk_file <- header_info$common_info$vmrk_file
+      srate  <- header_info$common_info$srate
+      event_table <- load_vmrk(paste0(file_path, vmrk_file), srate)
+      data <- import_dat(paste0(file_path, dat_file), 
+                        header_info$common_info$data_points,
+                        header_info$chan_info, 
+                        srate, 
+                        header_info$common_info$orientation, 
+                        event_table)
+
+
+    } else {
+      warning(paste0(".",data_ext, " files are unsupported."))
+    }
+
+  } else{
     warning("Unsupported filetype")
     return()
   }
@@ -310,4 +332,151 @@ load_set <- function(file_name, df_out = FALSE) {
     }
     out_data
   }
+}
+
+#' Import binary .dat file
+#'
+#' Beta version of a function to import binary .dat files. Only intended for
+#' importing of vectorized files in time domain.
+#'
+#' @param file_name Name of .dat file to be loaded.
+#' @param data_points Number of data points.
+#' @param srate Sampling rate.
+#' @param orientation Data orientation: VECTORIZED=ch1,pt1, ch1,pt2..., MULTIPLEXED=ch1,pt1, ch2,pt1.
+#' @param domain needs to be time domain.
+#' @param event_table Table with markers.
+#' @author Bruno Nicenboim \email{bruno.nicenboim@uni-potsdam.de}
+#' @import tidyverse
+#' @export
+
+
+import_dat <- function(file_name, data_points, chan_info, 
+                   srate, orientation = "vectorized", event_table = NULL) {
+  
+  n_chan <- nrow(chan_info)
+  dat_bin <- readBin(file_name, "double", data_points * n_chan, size = 4)
+
+  if(str_to_lower(str_sub(orientation,1,nchar("vector"))) == "vector"){
+    sigs <- matrix(dat_bin, ncol = n_chan)  %>% 
+                as.tibble() 
+  } else {
+    stop("orientiation needs to be 'vectorized'")
+  }
+
+  colnames(sigs)  <- chan_info$labels
+  n_chan <- nrow(chan_info)
+  dat_bin <- readBin(file_name, "double", data_points * n_chan, size = 4)
+  timings <- tibble(sample = 1:dim(sigs)[[1]]) %>%
+              mutate(time = (sample - 1) / srate)
+  data <- eeg_data(data = sigs, srate = srate,
+                     chan_info = chan_info,
+                     events = event_table, timings = timings,
+                     continuous = TRUE)
+
+  return(data)
+}
+
+
+#' Load header file (.vhdr) produced by BrainVision Analyzer v 2.0
+#'
+#' Beta version of a function to load header file (.vhdr) produced by BrainVision Analyzer v 2.0.
+#'
+#' @param file_name Name of .vhdr file to be loaded.
+#' @author Bruno Nicenboim \email{bruno.nicenboim@uni-potsdam.de}
+#' @import tidyverse
+#' @export
+#' 
+load_vhdr <- function(file_name) {
+
+  content_vhdr <- read_file(file_name) %>% 
+            str_match_all(regex("\\[(.*?)\\]\n(.*?\n)(\n|\\Z)", 
+              dotall = TRUE, multiline=TRUE) ) %>% .[[1]]
+
+  read_metadata <- function(tag) {
+   read_delim(content_vhdr[content_vhdr[,2] == tag,3],
+                 delim = "=", comment = ";", col_names=c("type", "value"))
+ }           
+
+  out <- list()
+  binary_info <- read_metadata("Binary Infos")
+  channel_info <- read_metadata("Channel Infos") %>% 
+              separate(value, c("labels","ref","res","unit"), sep=",")
+  coordinates <- read_metadata("Coordinates") %>% 
+                separate(value, c("radius","theta","phi"), sep=",")
+  
+  
+  common_info <- read_metadata("Common Infos") %>% 
+                 spread(type, value) %>% 
+                 transmute(data_points = as.numeric(DataPoints),
+                            seg_data_points = as.numeric(SegmentDataPoints),
+                            orientation = DataOrientation,
+                            domain = DataType,
+                            srate =  1000000 / as.numeric(SamplingInterval),
+                            data_file = DataFile,
+                            vmrk_file = MarkerFile)
+
+  if(str_to_lower(str_sub(common_info$domain,1,nchar("time"))) != "time") {
+    stop("DataType needs to be 'time'")
+  } else 
+  chan_info <- full_join(channel_info, coordinates, by = "type") %>% 
+                mutate(type = "EEG", sph.theta = NA, sph.phi = NA, 
+                        sph.radius = NA, urchan = NA,X=NA,Y=NA,Z=NA) %>%
+                select(labels, type, theta, radius, X, Y, Z, sph.theta,
+                 sph.phi, sph.radius, urchan, ref)
+
+  out <- list()
+  out$chan_info <- chan_info
+  out$common_info <- common_info
+  return(out)
+}
+
+#' Load marker file (.vmrk) produced by BrainVision Analyzer v 2.0
+#'
+#' Beta version of a function to load marker files (.vhdr) produced by BrainVision Analyzer v 2.0.
+#'
+#' @param file_name Name of .vhdr file to be loaded.
+#' @param srate Sampling rate.
+#' @author Bruno Nicenboim \email{bruno.nicenboim@uni-potsdam.de}
+#' @import tidyverse
+#' @export
+#' 
+
+
+load_vmrk <- function(file_name, srate) {
+  # Each entry looks like this in the vmrk file:
+  # Mk<Marker number>=<Type>,<Description>,<Position in data
+  # points>, <Size in data points>, <Channel number (0 = marker is related to
+  # all channels)>, <Date (YYYYMMDDhhmmssuuuuuu)>
+  # More information can be found in
+  # http://pressrelease.brainproducts.com/markers/
+  markers_info_lines <- read_lines(file_name) %>% 
+                        str_detect("Mk[0-9]*?=") %>% which 
+  start <- markers_info_lines %>% min - 1
+  end <- markers_info_lines %>% max - start 
+
+  col_names = c("Mk_number=Type","description","pos_dpoints", 
+              "size_dp", "channel","date")
+
+  tibble_vmrk <- suppressWarnings(read_csv(file_name, col_names = col_names,
+                    col_types = cols(
+                                `Mk_number=Type` = col_character(),
+                                description = col_character(),
+                                pos_dpoints = col_integer(),
+                                size_dp = col_integer(),
+                                channel = col_integer(),
+                                date = col_double()
+                                ),
+                    skip = start, n_max= end,
+                    trim_ws = TRUE)) %>%
+                  separate(`Mk_number=Type`, c("mk","type"), sep ="=") %>%
+                  mutate(mk = as.numeric(str_remove(mk,"Mk")))
+
+  event_table <- tibble_vmrk %>% 
+                  transmute(event_type = str_replace(description,"s","") %>% 
+                                          as.integer, 
+                          event_time = (pos_dpoints - 1 ) / srate,
+                          event_onset = pos_dpoints - 1) %>% 
+                  filter(!is.na(event_type))
+           
+  return(event_table)              
 }
