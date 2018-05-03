@@ -84,7 +84,7 @@ reref_eeg <- function(data, ref_chans = "average", exclude = NULL,
   }
 
   if (is.eeg_data(data)) {
-    data$signals <- tmp_data
+    data$signals <- tibble::as_tibble(tmp_data)
     if (any(ref_chans == "average")) {
       data$reference <- list(ref_chans = ref_chans, ref_data = ref_data,
                              excluded = excluded)
@@ -94,41 +94,91 @@ reref_eeg <- function(data, ref_chans = "average", exclude = NULL,
     }
     return(data)
   } else {
-    return(as_tibble(tmp_data))
+    return(tibble::as_tibble(tmp_data))
   }
 }
 
-#' Baseline correction.
+#' Baseline correction
 #'
 #' Used to remove the mean of a specified time period from the data. Currently
 #' only performs subtractive baseline. With a data frame, searches for
 #' "electrode" and "epoch" columns, and groups on these when found. An electrode
 #' column is always required; an epoch column is not.
 #'
-#' @author Matt Craddock \email{matt@mattcraddock.com}
+#' @author Matt Craddock \email{matt@@mattcraddock.com}
 #' @param data Data to be baseline corrected.
-#' @param time_lim Numeric character vector (e.g. time_lim <- c(-.1, 0)). If
-#'   none given, defaults to mean of whole epoch if the data is epoched, or the
-#'   channel mean if the data is continuous.
-#' @import dplyr
-#' @import tidyr
+#' @param ... other parameters to be passed to functions
+#' @importFrom tibble as_tibble
 #' @export
 
-rm_baseline <- function(data, time_lim = NULL) {
+rm_baseline <- function(data, ...) {
+  UseMethod("rm_baseline", data)
+}
 
-  obj_class <- is.eeg_data(data)
+#' @param time_lim Numeric character vector (e.g. time_lim <- c(-.1, 0)). If
+#'   none given, defaults to mean of the whole of each epoch if the data is epoched, or the
+#'   channel mean if the data is continuous.
+#' @describeIn rm_baseline remove baseline from continuous eeg_data
+#' @export
+rm_baseline.eeg_data <- function(data, time_lim = NULL, ...) {
 
-  if (obj_class) {
-    orig_data <- data
-    data <- cbind(data$signals, data$timings)
-    if (orig_data$continuous){
-      data <- tidyr::gather(data, electrode, amplitude, -time,
-                            -sample, factor_key = TRUE)
-    } else {
-      data <- tidyr::gather(data, electrode, amplitude, -time,
-                            -epoch, -sample, factor_key = TRUE)
+  if (is.null(time_lim)) {
+    baseline_dat <- colMeans(data$signals)
+    if (!is.null(data$reference$ref_data)) {
+      data$reference$ref_data <- data$reference$ref_data - mean(data$reference$ref_data[[1]])
+    }
+  } else {
+    base_times <- select_times(data, time_lim = time_lim)
+    baseline_dat <- colMeans(base_times$signals)
+    if (!is.null(data$reference$ref_data)) {
+      data$reference$ref_data <- data$reference$ref_data - mean(base_times$reference$ref_data[[1]])
     }
   }
+  data$signals <- tibble::as_tibble(sweep(data$signals, 2, baseline_dat, '-'))
+  return(data)
+}
+
+#' @describeIn rm_baseline Remove baseline from eeg_epochs
+#' @export
+rm_baseline.eeg_epochs <- function(data, time_lim = NULL, ...) {
+
+  n_epochs <- length(unique(data$timings$epoch))
+  n_times <- length(unique(data$timings$time))
+  n_chans <- ncol(data$signals)
+  elecs <- names(data$signals)
+
+  if (is.null(time_lim)) {
+    data$signals <- as.matrix(data$signals)
+    dim(data$signals) <- c(n_times, n_epochs, n_chans)
+    baseline_dat <- colMeans(data$signals)
+    data$signals <- vapply(1:n_times,
+                           function(x) data$signals[x, , ] - baseline_dat,
+                           array(0, dim = c(n_epochs, n_chans)))
+    data$signals <- aperm(data$signals, c(3, 1, 2))
+    data$signals <- array(data$signals, dim = c(n_epochs * n_times, n_chans))
+    data$signals <- tibble::as_tibble(data$signals)
+    names(data$signals) <- elecs
+  } else {
+    base_times <- select_times(data, time_lim = time_lim)
+    base_times$signals <- split(base_times$signals, base_times$timings$epoch)
+    base_baselines <- lapply(base_times$signals, colMeans)
+    data$signals <- split(data$signals, data$timings$epoch)
+    data$signals <- lapply(seq_along(data$signals),
+                           function(i) sweep(data$signals[[i]],
+                                             2,
+                                             base_baselines[[i]],
+                                             '-'))
+    data$signals <- do.call(rbind, data$signals)
+    #data$signals <- as.matrix(data$signals)
+    #dim(data$signals) <- c(n_times, n_epochs, n_chans)
+  }
+  return(data)
+
+}
+
+#' @describeIn rm_baseline Legacy method for data.frames
+#' @export
+rm_baseline.data.frame <- function(data, time_lim = NULL, ...) {
 
   if (!("time" %in% colnames(data))) {
     stop("Time dimension is required.")
@@ -164,28 +214,16 @@ rm_baseline <- function(data, time_lim = NULL) {
   }
 
   data <- ungroup(data)
-
-  if (obj_class) {
-    data <- tidyr::spread(data, electrode, amplitude)
-    if (orig_data$continuous) {
-      orig_data$signals <- dplyr::select(data, -time, -sample)
-      orig_data$timings <- dplyr::select(data, time, sample)
-    } else {
-      orig_data$signals <- dplyr::select(data, -time, -epoch, -sample)
-      orig_data$timings <- dplyr::select(data, time, epoch, sample)
-    }
-    orig_data
-  } else {
-    data
-  }
+  data
 }
 
 #' Create epochs from EEG data
 #'
 #' Creates epochs around specified event triggers. Requires data of class
-#' \code{eeg_data}.
+#' \code{eeg_data}. Where multiple events are specified, epochs will be created
+#' around each event.
 #'
-#' @author Matt Craddock \email{matt@mattcraddock.com}
+#' @author Matt Craddock \email{matt@@mattcraddock.com}
 #' @param data Continuous data to be epoched.
 #' @param ... Parameters passed to functions
 #'
@@ -236,16 +274,24 @@ epoch_data.eeg_data <- function(data, events, time_lim = c(-1, 1), ...) {
     srate <- data$srate * samp_diff
   }
 
+  # create a vector that counts back and ahead of the timelock event in samples
+  # i.e. if srate is 1000, a vector from -100 to 0 to 100 would be -.1 s before
+  # to .1 s after event onset
+
   samps <- seq(round(time_lim[[1]] * srate),
                round(time_lim[[2]] * (srate - 1)),
                by = samp_diff)
 
   event_table <- data$events
 
+  # go through all events and find which match those specified as the events to
+  # epoch around
   epoch_zero <-
     sort(unlist(purrr::map(events,
                            ~ event_table[which(event_table$event_type == .), ]$event_onset)))
 
+  # for each epoching event, create a vector of samples before and after that
+  # are within the time limits
   epoched_data <- purrr::map(epoch_zero,
                              ~ . + samps)
 
@@ -253,7 +299,7 @@ epoch_data.eeg_data <- function(data, events, time_lim = c(-1, 1), ...) {
                                 ~ tibble::tibble(sample = ., time = samps / srate),
                                 .id = "epoch")
 
-  # create new event_table NOW
+  # create new event_table
   event_table <- dplyr::inner_join(event_table, epoched_data,
                                    by = c("event_onset" = "sample"))
 
@@ -262,6 +308,17 @@ epoch_data.eeg_data <- function(data, events, time_lim = c(-1, 1), ...) {
                                    cbind(data$signals, data$timings),
                                    by = c("sample" = "sample"))
 
+  # Check for any epochs that contain NAs
+  epoched_data <- split(epoched_data, epoched_data$epoch)
+  na_epochs <- vapply(epoched_data, function(x) any(is.na(x)), FUN.VALUE = logical(1))
+  epoched_data <- epoched_data[!na_epochs]
+  epoched_data <- do.call(rbind, epoched_data)
+
+  event_table <- event_table[event_table$epoch %in% names(na_epochs[!na_epochs]), ]
+
+  if (any(na_epochs)) {
+    cat(paste(sum(na_epochs), "epoch(s) with NAs removed. Epoch boundaries would lie outside data."))
+  }
 
   if (!is.null(data$reference)) {
     ref_data <- dplyr::left_join(epoched_data,
@@ -300,7 +357,7 @@ epoch_data.eeg_epochs <- function(data, ...) {
 #' \code{signal} package. Note that this will also adjust the event table,
 #' moving events to the nearest time remaining after downsampling
 #'
-#' @author Matt Craddock \email{matt@mattcraddock.com}
+#' @author Matt Craddock \email{matt@@mattcraddock.com}
 #'
 #' @param data An \code{eeg_data} object to be downsampled
 #' @param ... Parameters passed to functions
@@ -379,6 +436,7 @@ eeg_combine <- function(data, ...) {
 
 #' @describeIn eeg_combine Method for combining \code{eeg_data} objects.
 #' @export
+
 eeg_combine.eeg_data <- function(data, ...){
 
   args <- list(...)
@@ -407,6 +465,7 @@ eeg_combine.eeg_data <- function(data, ...){
 
 #' @describeIn eeg_combine Method for combining \code{eeg_epochs} objects
 #' @export
+
 eeg_combine.eeg_epochs <- function(data, ...) {
 
   args <- list(...)
@@ -414,8 +473,12 @@ eeg_combine.eeg_epochs <- function(data, ...) {
     stop("Nothing to combine.")
   }
   if (all(sapply(args, is.eeg_epochs))) {
+
     data$signals <- dplyr::bind_rows(data$signals,
                                      purrr::map_df(args, ~.$signals))
+
+     # args[[i]]$timings
+    #}
     data$events <- dplyr::bind_rows(data$events,
                                     purrr::map_df(args, ~.$events))
     data$timings <- dplyr::bind_rows(data$timings,
@@ -429,5 +492,100 @@ eeg_combine.eeg_epochs <- function(data, ...) {
     stop("All inputs must be eeg_epochs objects.")
   }
 
+  data
+}
+
+
+#' Check consistency of event and timing tables
+#'
+#' @param data \code{eeg_epochs} object
+
+check_timings <- function(data) {
+
+  while (any(diff(data$timings$epoch) < 0)) {
+
+    # check consistency of the data timings table.
+    # timings should be consistently increasing.
+    # only works correctly with 2 objects
+    n_rows <- nrow(data$timings)
+    switch_loc <- which.min(diff(data$timings$epoch))
+    switch_epo <- data$timings$epoch[switch_loc]
+    switch_sample <- data$timings$sample[switch_loc]
+    data$timings$epoch[(switch_loc+1):n_rows] <-
+      data$timings$epoch[(switch_loc+1):n_rows] + switch_epo
+    data$timings$sample[(switch_loc+1):n_rows] <-
+      data$timings$sample[(switch_loc+1):n_rows] + switch_sample
+
+  }
+
+  if (any(diff(data$events$event_time) < 0)) {
+
+    #check consistency of the data event table
+    n_rows <- nrow(data$events)
+    switch_loc <- which.min(diff(data$events$event_time))
+    switch_epo <- data$events$epoch[switch_loc]
+
+  }
+  data
+
+}
+
+#' Calculate averages (e.g. ERPs)
+#'
+#' @param data An \code{eeg_epochs} object.
+#' @param ... Other arguments passed to the averaging functions
+#' @author Matt craddock \email{matt@@mattcraddock.com}
+
+eeg_average <- function(data, ...) {
+  UseMethod("eeg_average", data)
+}
+
+#' Default method
+#' @param data An \code{eeg_epochs} object.
+#' @param ... Other arguments passed to the averaging functions
+#' @author Matt craddock \email{matt@@mattcraddock.com}
+
+eeg_average.default <- function(data, ...) {
+  stop("eeg_epochs object required as input.")
+}
+
+#' Create an \code{eeg_evoked} object from eeg_epochs
+#'
+#' @param cond_label Only pick events that include a given label. Character vector.
+#' @describeIn eeg_average Create evoked data from \code{eeg_epochs}
+eeg_average.eeg_epochs <- function(data, cond_label = NULL, ...) {
+
+  if (is.null(cond_label)) {
+    data$signals <- split(data$signals, data$timings$time)
+    data$signals <- lapply(data$signals, colMeans)
+    data$signals <- as.data.frame(do.call("rbind", data$signals))
+
+    row.names(data$signals) <- NULL
+
+  } else {
+
+    if (all(cond_label %in% unique(list_epochs(data)$event_label))) {
+      evoked <- vector("list", length(cond_label))
+      for (i in seq_along(cond_label)) {
+        tmp_dat <- select_epochs(data, cond_label[[i]])
+        tmp_dat$signals <- split(tmp_dat$signals, tmp_dat$timings$time)
+        tmp_dat$signals <- lapply(tmp_dat$signals, colMeans)
+        evoked[[i]] <- as.data.frame(do.call("rbind", tmp_dat$signals))
+        row.names(evoked[[i]]) <- NULL
+        }
+      data$signals <- evoked
+      if (length(cond_label) > 1) {
+        names(data$signals) <- cond_label
+        } else {
+          data$signals <- data$signals[[1]]
+        }
+    } else {
+      stop("Not all epoch labels found.")
+    }
+  }
+  data$reference$ref_data <- NULL
+  data$events <- NULL
+  data$timings <- unique(data$timings["time"])
+  class(data) <- c("eeg_evoked", "eeg_data")
   data
 }

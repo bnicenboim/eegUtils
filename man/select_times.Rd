@@ -5,6 +5,7 @@
 \alias{select_times.default}
 \alias{select_times.eeg_data}
 \alias{select_times.eeg_epochs}
+\alias{select_times.eeg_evoked}
 \title{Select timerange}
 \usage{
 select_times(data, ...)
@@ -14,6 +15,9 @@ select_times(data, ...)
 \method{select_times}{eeg_data}(data, time_lim = NULL, df_out = FALSE, ...)
 
 \method{select_times}{eeg_epochs}(data, time_lim = NULL, df_out = FALSE,
+  ...)
+
+\method{select_times}{eeg_evoked}(data, time_lim = NULL, df_out = FALSE,
   ...)
 }
 \arguments{
@@ -31,7 +35,9 @@ Data frame with only data from within the specified range.
 }
 \description{
 Generic function for selecting specific time ranges from a given dataset.
-Input can be a dataframe, or an object of class \code{eeg_data} or \code{eeg_epochs}
+Input can be a dataframe, or an object of class \code{eeg_data} or
+\code{eeg_epochs}. Note this finds the closest times to those specified, so
+times out may not correspond exactly to requested times.
 }
 \section{Methods (by class)}{
 \itemize{
@@ -40,6 +46,8 @@ Input can be a dataframe, or an object of class \code{eeg_data} or \code{eeg_epo
 \item \code{eeg_data}: Select times from an eeg_data object
 
 \item \code{eeg_epochs}: Select times in \code{eeg_epoch} objects
+
+\item \code{eeg_evoked}: Select times in \code{eeg_evoked} objects
 }}
 
 \author{

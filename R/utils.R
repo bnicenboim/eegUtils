@@ -167,18 +167,34 @@ eeg_data <- function(data,
   value
 }
 
+#' Function to create an S3 object of class "eeg_evoked"
+#'
+#' @author Matt Craddock \email{matt@@mattcraddock.com}
+#' @param data evoked data
+#' @param chan_info Electrode locations etc
+#' @param timings vector of timepoints
+#' @param ... Other parameters
+
+eeg_evoked <- function(data, chan_info, timings, ...) {
+  value <- list(signals = data,
+                chan_info = chan_info,
+                timings = timings)
+  class(value) <- c("eeg_evoked", "eeg_data")
+}
 
 #' Function to create an S3 object of class "eeg_stats".
 #'
-#' @author Matt Craddock \email{matt@mattcraddock.com}
+#' @author Matt Craddock \email{matt@@mattcraddock.com}
 #' @param statistic Calculated statistic (e.g. t-statistic)
+#' @param pvals calculated p-values for that statistic
 #' @param chan_info String of character names for electrodes.
 #' @param timings Unique timepoints remaining in the data.
 #' @export
 
-eeg_stats <- function(statistic, chan_info, timings) {
+eeg_stats <- function(statistic, chan_info, pvals, timings) {
 
   value <- list(statistic = statistic,
+                pvals = pvals,
                 chan_info = chan_info,
                 timings = timings)
   class(value) <- "eeg_stats"
@@ -202,19 +218,25 @@ is.eeg_data <- function(x) inherits(x, "eeg_data")
 
 is.eeg_epochs <- function(x) inherits(x, "eeg_epochs")
 
-#' Check if object is of class "eeg_erp".
+#' Check if object is of class \code{eeg_evoked}
 #'
 #' @author Matt Craddock \email{matt@mattcraddock.com}
 #' @param x Object to check.
 
-is.eeg_erp <- function(x) inherits(x, "eeg_erp")
-
+is.eeg_evoked <- function(x) inherits(x, "eeg_evoked")
 
 #' Check if object is of class \code{eeg_stats}
 #'
 #' @param x Object to check.
 #
 is.eeg_stats <- function(x) inherits(x, "eeg_stats")
+
+#' Check if object is of class \code{eeg_ICA}
+#'
+#' @param x Object to check.
+#'
+
+is.eeg_ICA <- function(x) inherits(x, "eeg_ICA")
 
 #' Convert eeg_data to data.frame
 #'
@@ -256,6 +278,60 @@ as.data.frame.eeg_data <- function(x, row.names = NULL,
 
   if (events) {
     df <- dplyr::left_join(df, x$events, by = c("sample" = "event_onset"))
+  }
+  return(df)
+}
+
+
+#' Convert \code{eeg_evoked} object to data frame
+#
+#' @author Matt Craddock \email{matt@mattcraddock.com}
+#' @param x Object of class \code{eeg_evoked}
+#' @param row.names Kept for compatability with S3 generic, ignored.
+#' @param optional Kept for compatability with S3 generic, ignored.
+#' @param long Convert to long format. Defaults to FALSE
+#' @param ... arguments for other as.data.frame commands
+#'
+#' @importFrom tidyr gather
+#' @export
+
+as.data.frame.eeg_evoked <- function(x, row.names = NULL,
+                                     optional = FALSE, long = FALSE, ...) {
+  df <- data.frame(x$signals, time = x$timings$time)
+  if (long) {
+    df <- tidyr::gather(df,
+                        electrode,
+                        amplitude,
+                        -time,
+                        factor_key = T)
+  }
+  return(df)
+}
+
+#' Convert \code{eeg_ICA} object to data frame
+#
+#' @author Matt Craddock \email{matt@mattcraddock.com}
+#' @param x Object of class \code{eeg_ICA}
+#' @param row.names Kept for compatability with S3 generic, ignored.
+#' @param optional Kept for compatability with S3 generic, ignored.
+#' @param long Convert to long format. Defaults to FALSE
+#' @param ... arguments for other as.data.frame commands
+#'
+#' @importFrom tidyr gather
+#' @export
+
+as.data.frame.eeg_ICA <- function(x, row.names = NULL,
+                                  optional = FALSE, long = FALSE, ...) {
+  names(x$comp_activations) <- 1:ncol(x$comp_activations)
+  df <- data.frame(x$comp_activations, x$timings)
+  if (long) {
+    df <- tidyr::gather(df,
+                        electrode,
+                        amplitude,
+                        -time,
+                        -epoch,
+                        -sample,
+                        factor_key = T)
   }
   return(df)
 }

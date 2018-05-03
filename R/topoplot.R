@@ -42,7 +42,7 @@ topoplot.default <- function(data, ...) {
 #' @param limits Limits of the fill scale - should be given as a character vector
 #'   with two values specifying the start and endpoints e.g. limits = c(-2,-2).
 #'   Will ignore anything else. Defaults to the range of the data.
-#' @param chanLocs Not yet implemented.
+#' @param chanLocs Allows passing of channel locations (see \code{electrode_locations})
 #' @param method Interpolation method. "Biharmonic" or "gam". "Biharmonic"
 #'   implements the same method used in Matlab's EEGLAB. "gam" fits a
 #'   Generalized Additive Model with k = 40 knots. Defaults to biharmonic spline
@@ -99,6 +99,7 @@ topoplot.data.frame <- function(data, time_lim = NULL, limits = NULL,
       time_lim <- data$time[which.min(abs(data$time - time_lim))]
       data <- data[data$time == time_lim, ]
       } else if (length(time_lim) == 2) {
+        range(data$time)
         data <- select_times(data, time_lim)
       }
     }
@@ -109,7 +110,11 @@ topoplot.data.frame <- function(data, time_lim = NULL, limits = NULL,
     message("Electrode locations found.")
   } else if (!is.null(chanLocs)) {
     if (length(grep("^x$|^y$", colnames(chanLocs))) > 1) {
+      data$electrode <- toupper(data$electrode)
       data <- dplyr::left_join(data, chanLocs, by = "electrode")
+      if (any(is.na(data$x))) {
+        data <- data[!is.na(data$x),]
+        }
       } else {
         warnings("No channel locations found in chanLocs.")
       }
@@ -311,7 +316,7 @@ topoplot.data.frame <- function(data, time_lim = NULL, limits = NULL,
 }
 
 
-#' Topographical Plotting Function for EEG
+#' Topographical Plotting Function for EEG data
 #'
 #' Both \code{eeg_epochs} and \code{eeg_data} objects are supported.
 #'
@@ -325,6 +330,9 @@ topoplot.eeg_data <- function(data, time_lim = NULL, limits = NULL,
                               chan_marker = "point", quantity = "amplitude",
                               montage = NULL, ...) {
 
+  if (!is.null(data$chan_info)) {
+    chanLocs <- data$chan_info
+  }
   data <- as.data.frame(data, long = TRUE)
   topoplot(data, time_lim = time_lim, limits = limits,
            chanLocs = chanLocs, method = method, r = r,
@@ -332,6 +340,21 @@ topoplot.eeg_data <- function(data, time_lim = NULL, limits = NULL,
            interp_limit = interp_limit, contour = contour,
            chan_marker = chan_marker, quantity = quantity,
            montage = montage, passed = TRUE)
+}
+
+
+#' @param comp Component to plot (numeric)
+#' @describeIn topoplot Topographical plot for \code{eeg_ICA} objects
+topoplot.eeg_ICA <- function(data, time_lim = NULL, limits = NULL,
+                             chanLocs = NULL, method = "Biharmonic", r = NULL,
+                             grid_res = 67, palette = "RdBu",
+                             interp_limit = "skirt", contour = TRUE,
+                             chan_marker = "point", quantity = "amplitude",
+                             montage = NULL, colourmap, comp, ...) {
+  data <- data.frame(amplitude = scale(data$mixing_matrix[, comp]),
+                     electrode = data$mixing_matrix$electrode)
+  topoplot(data)
+
 }
 
 #' Set palette and limits for topoplot
