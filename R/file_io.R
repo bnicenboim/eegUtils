@@ -390,12 +390,17 @@ import_dat <- function(file_name, data_points, chan_info,
 load_vhdr <- function(file_name) {
 
   content_vhdr <- readr::read_file(file_name) %>% 
-            stringr::str_match_all(stringr::regex("\\[(.*?)\\]\n(.*?\n)(\n|\\Z)", 
+            stringr::str_match_all(stringr::regex("([A-Za-z ]*?)\\](.*?)(\\[|\\Z)", 
               dotall = TRUE, multiline=TRUE) ) %>% .[[1]]
 
-  read_metadata <- function(tag) {
-   readr::read_delim(content_vhdr[content_vhdr[,2] == tag,3],
-                 delim = "=", comment = ";", col_names=c("type", "value"))
+  read_metadata <- function(tag, vhdr = content_vhdr) {
+   info <- vhdr[vhdr[,2] == tag,3]
+   if(length(info) == 0){
+    return(tibble::tibble(type=character(), value=character()))
+   } else {
+   return(readr::read_delim(info,
+                 delim = "=", comment = ";", col_names=c("type", "value")))
+   }
  }           
 
   out <- list()
@@ -403,23 +408,32 @@ load_vhdr <- function(file_name) {
   channel_info <- read_metadata("Channel Infos") %>% 
               separate(value, c("labels","ref","res","unit"), sep=",")
   coordinates <- read_metadata("Coordinates") %>% 
-                separate(value, c("radius","theta","phi"), sep=",")
-  
-  
+                separate(value, c("radius","theta","phi"), sep=",", fill="right")
+  # this is ncase it can't find DataPoints and DataType in the header file
+  DataPoints <- NA 
+  DataType <- "time"
   common_info <- read_metadata("Common Infos") %>% 
-                 tidyr::spread(type, value) %>% 
-                 dplyr::transmute(data_points = as.numeric(DataPoints),
-                            seg_data_points = as.numeric(SegmentDataPoints),
+                 tidyr::spread(type, value) %>%
+                 readr::type_convert(col_types = readr::cols(
+                                            DataFile = col_character(),
+                                            DataFormat = col_character(),
+                                            DataOrientation = col_character(),
+                                            MarkerFile = col_character(),
+                                            NumberOfChannels = col_integer(),
+                                            SamplingInterval = col_double())) %>%
+                 dplyr::transmute(data_points = DataPoints,
+                            # seg_data_points = as.numeric(SegmentDataPoints),
                             orientation = DataOrientation,
                             domain = DataType,
-                            srate =  1000000 / as.numeric(SamplingInterval),
+                            srate =  1000000 / SamplingInterval,
                             data_file = DataFile,
                             vmrk_file = MarkerFile)
 
   if(stringr::str_sub(common_info$domain,1,nchar("time")) %>% 
       stringr::str_to_lower() != "time") {
     stop("DataType needs to be 'time'")
-  } else 
+  }
+
   chan_info <- dplyr::full_join(channel_info, coordinates, by = "type") %>% 
                 dplyr::mutate(type = "EEG", sph.theta = NA, sph.phi = NA, 
                         sph.radius = NA, urchan = NA,X=NA,Y=NA,Z=NA) %>%
